@@ -29,6 +29,23 @@ export interface StreamStats {
 
 export type ServiceStatus = 'checking' | 'ready' | 'offline';
 
+/**
+ * Why a session ended, so the UI can confirm it accurately.
+ * - `local`: this user chose End session / Leave.
+ * - `source-stopped`: the presenter stopped capture from the browser's own sharing bar.
+ * - `remote`: the other side ended or left.
+ * - `declined`: the presenter declined the viewer's request.
+ * - `connection`: signaling or media was lost, or setup failed.
+ */
+export type EndReason = 'local' | 'source-stopped' | 'remote' | 'declined' | 'connection';
+
+/** Shown in the stage after a session ends; cleared when the next one starts. */
+export interface EndSummary {
+  role: Role;
+  reason: EndReason;
+  seconds: number;
+}
+
 export interface SessionState {
   phase: SessionPhase;
   role: Role;
@@ -54,6 +71,7 @@ export interface SessionState {
   quality: QualityKey;
   stats: StreamStats;
   elapsedSeconds: number;
+  endSummary: EndSummary | null;
 }
 
 /** Record handed to the history feature when a session finishes. */
@@ -64,7 +82,7 @@ export interface SessionRecord {
 }
 
 export interface SessionCallbacks {
-  onToast: (message: string) => void;
+  onToast: (message: string, tone?: 'success' | 'info' | 'error') => void;
   onChatMessage: (message: ChatMessage) => void;
   onChatReset: () => void;
   onSessionRecorded: (record: SessionRecord) => void;

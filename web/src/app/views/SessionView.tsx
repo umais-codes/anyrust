@@ -1,5 +1,5 @@
 import { ChatPanel } from '@/features/chat';
-import { InvitePanel } from '@/features/present';
+import { InvitePanel, StartSharingActions } from '@/features/present';
 import { SessionDetails, SessionPanel, phaseBadge } from '@/features/session';
 import { Page, PageHeader } from '@/shared/layout';
 import { Badge, Button, Icon } from '@/shared/ui';
@@ -30,10 +30,7 @@ export function SessionView({ session, chat }: ViewProps) {
               {state.ending ? 'Ending…' : 'End session'}
             </Button>
           ) : (
-            <>
-              <ViewLink to="join">Join a session</ViewLink>
-              <ViewLink to="share" variant="primary">Start sharing</ViewLink>
-            </>
+            <ViewLink to="join">Join a session</ViewLink>
           )
         }
       />
@@ -41,6 +38,13 @@ export function SessionView({ session, chat }: ViewProps) {
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
         <SessionPanel
           state={state}
+          idleActions={
+            <StartSharingActions
+              state={state}
+              onShare={(useSample) => void session.share(useSample)}
+              className="flex flex-wrap justify-center gap-2"
+            />
+          }
           renderChat={({ open, fullscreen, onOpenChange }) => (
             <ChatPanel
               log={chat}

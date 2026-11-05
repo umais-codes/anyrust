@@ -15,9 +15,11 @@ interface SessionPanelProps {
   state: SessionState;
   /** The chat feature renders here so it travels with the panel into fullscreen. */
   renderChat: (context: ChatSlotContext) => ReactNode;
+  /** Shown under the empty-stage message while no session is active, e.g. the start-sharing buttons. */
+  idleActions?: ReactNode;
 }
 
-export function SessionPanel({ state, renderChat }: SessionPanelProps) {
+export function SessionPanel({ state, renderChat, idleActions }: SessionPanelProps) {
   const panelRef = useRef<HTMLElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [fullscreen, setFullscreen] = useState(false);
@@ -28,7 +30,8 @@ export function SessionPanel({ state, renderChat }: SessionPanelProps) {
   const { stream, phase, role, active } = state;
   const live = phase === 'live';
   const badge = phaseBadge[phase];
-  const empty = emptyState(role, active, phase);
+  const empty = emptyState(role, active, phase, state.endSummary);
+  const endedCleanly = phase === 'ended' && state.endSummary?.role === 'host';
 
   useEffect(() => {
     const video = videoRef.current;
@@ -52,9 +55,10 @@ export function SessionPanel({ state, renderChat }: SessionPanelProps) {
     return () => document.removeEventListener('fullscreenchange', onChange);
   }, []);
 
+  // Leave fullscreen as soon as the session ends, so the user lands back on the regular view.
   useEffect(() => {
-    if (!stream && document.fullscreenElement === panelRef.current) void document.exitFullscreen().catch(() => undefined);
-  }, [stream]);
+    if ((!stream || !active) && document.fullscreenElement === panelRef.current) void document.exitFullscreen().catch(() => undefined);
+  }, [stream, active]);
 
   const toggleFullscreen = async () => {
     try {
@@ -109,13 +113,19 @@ export function SessionPanel({ state, renderChat }: SessionPanelProps) {
             hidden={!stream}
           />
           {!stream && (
-            <div className="grid max-w-sm justify-items-center gap-2 p-6 text-center">
-              <span className="mb-2 flex size-14 items-center justify-center rounded-xl border border-stage-foreground/10 bg-stage-foreground/5">
-                <Icon name="screen" size={26} />
+            <div className="grid max-w-sm justify-items-center gap-2 p-6 text-center" role={phase === 'ended' ? 'status' : undefined}>
+              <span
+                className={cn(
+                  'mb-2 flex size-14 items-center justify-center rounded-xl border border-stage-foreground/10 bg-stage-foreground/5',
+                  endedCleanly && 'border-success/25 bg-success/10 text-success',
+                )}
+              >
+                <Icon name={empty.icon} size={26} />
               </span>
               <h3 className="text-base font-semibold">{empty.title}</h3>
               <p className="text-sm text-stage-foreground/70">{empty.description}</p>
               <span className="mt-2 text-xs uppercase tracking-wider text-stage-foreground/50">{empty.caption}</span>
+              {!active && idleActions && <div className="mt-3 flex justify-center">{idleActions}</div>}
             </div>
           )}
           {stream && state.sourceLabel && (

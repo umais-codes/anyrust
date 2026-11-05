@@ -1,5 +1,6 @@
-import { Badge, Button, Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle, Icon, IconChip } from '@/shared/ui';
+import { Badge, Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle, Icon, IconChip } from '@/shared/ui';
 import type { SessionState } from '@/features/session';
+import { StartSharingActions } from './StartSharingActions';
 
 interface ShareCardProps {
   state: SessionState;
@@ -12,16 +13,8 @@ const highlights = [
   'View-only access, with no remote control',
 ];
 
-function startLabel(state: SessionState): string {
-  if (state.ending) return 'Ending session…';
-  if (state.busy) return state.phase === 'choosing' ? 'Select a source…' : 'Starting session…';
-  return state.canCapture ? 'Start sharing' : 'Requires a desktop browser';
-}
-
 /** Starts a hosted session. The invite link lives in InvitePanel on the session view. */
 export function ShareCard({ state, onShare }: ShareCardProps) {
-  const locked = state.busy || state.ending || state.active || state.service !== 'ready';
-
   return (
     <Card as="article">
       <CardHeader>
@@ -46,15 +39,8 @@ export function ShareCard({ state, onShare }: ShareCardProps) {
         </ul>
       </CardContent>
 
-      <CardFooter className="flex-wrap gap-2 border-t">
-        <Button variant="primary" disabled={locked || !state.canCapture} aria-busy={state.busy} onClick={() => onShare(false)}>
-          <Icon name="screenShare" />
-          {startLabel(state)}
-        </Button>
-        <Button variant="outline" disabled={locked} onClick={() => onShare(true)}>
-          <Icon name="play" />
-          Use a demo stream
-        </Button>
+      <CardFooter className="border-t">
+        <StartSharingActions state={state} onShare={onShare} />
       </CardFooter>
     </Card>
   );

@@ -1,6 +1,6 @@
 import { HistoryList } from '@/features/history';
 import { Page, PageHeader, SectionHeader } from '@/shared/layout';
-import { Card, CardDescription, CardFooter, CardHeader, CardTitle, IconChip } from '@/shared/ui';
+import { Button, Card, CardDescription, CardFooter, CardHeader, CardTitle, Icon, IconChip } from '@/shared/ui';
 import type { IconName } from '@/shared/ui';
 import { ActiveSessionCard, ViewLink } from './shared';
 import type { ViewProps } from './shared';
@@ -31,12 +31,24 @@ export function HomeView({ session, history }: ViewProps) {
                 <IconChip icon="screenShare" tone="brand" />
                 <div className="space-y-1.5">
                   <CardTitle>Share your screen</CardTitle>
-                  <CardDescription>Start a private session, send one invite link, and approve your viewer.</CardDescription>
+                  <CardDescription>Pick a window or screen and your invite link is copied automatically. Nothing is shown until you approve a viewer.</CardDescription>
                 </div>
               </div>
             </CardHeader>
             <CardFooter className="mt-auto">
-              <ViewLink to="share" variant={state.active ? 'outline' : 'primary'}>Start a session</ViewLink>
+              {state.active ? (
+                <ViewLink to="session" variant="primary">Open session</ViewLink>
+              ) : (
+                <Button
+                  variant="primary"
+                  disabled={state.busy || state.ending || state.service !== 'ready' || !state.canCapture}
+                  aria-busy={state.busy}
+                  onClick={() => void session.share(false)}
+                >
+                  <Icon name="screenShare" />
+                  {state.busy ? (state.phase === 'choosing' ? 'Select a source…' : 'Starting session…') : state.canCapture ? 'Start sharing' : 'Requires a desktop browser'}
+                </Button>
+              )}
             </CardFooter>
           </Card>
           <Card as="article">

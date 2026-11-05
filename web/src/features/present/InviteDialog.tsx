@@ -7,12 +7,14 @@ interface InviteDialogProps {
   open: boolean;
   state: SessionState;
   onClose: () => void;
+  /** The link was already placed on the clipboard when the session started. */
+  copied: boolean;
 }
 
 const canShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
 
 /** Shown once when a hosted session goes live, so the presenter can send the invite right away. */
-export function InviteDialog({ open, state, onClose }: InviteDialogProps) {
+export function InviteDialog({ open, state, onClose, copied }: InviteDialogProps) {
   const copy = useCopyInvite(state.inviteLink);
   const share = async () => {
     try {
@@ -46,6 +48,12 @@ export function InviteDialog({ open, state, onClose }: InviteDialogProps) {
       <p className="text-muted-foreground">
         Send this link to the person you want to share with. Nothing is shown until you approve their request, and access is always view-only.
       </p>
+      {copied && (
+        <p className="flex items-center gap-2 rounded-lg border border-success/25 bg-success/10 px-3 py-2 text-success" role="status">
+          <Icon name="check" size={16} className="shrink-0" />
+          Link copied to your clipboard. Paste it to anyone you want to invite.
+        </p>
+      )}
       <div className="grid gap-2">
         <Label htmlFor="invite-dialog-link">Invite link</Label>
         <div className="flex gap-2">

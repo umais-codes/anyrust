@@ -1,6 +1,7 @@
 import type { Role } from '@/shared/api';
-import type { BadgeTone } from '@/shared/ui';
-import type { SessionPhase } from '../model/types';
+import { formatClock } from '@/shared/lib';
+import type { BadgeTone, IconName } from '@/shared/ui';
+import type { EndSummary, SessionPhase } from '../model/types';
 
 export const phaseBadge: Record<SessionPhase, { label: string; tone: BadgeTone }> = {
   idle: { label: 'Idle', tone: 'neutral' },
@@ -17,21 +18,50 @@ export interface EmptyState {
   title: string;
   description: string;
   caption: string;
+  icon: IconName;
 }
 
-export function emptyState(role: Role, active: boolean, phase: SessionPhase): EmptyState {
+const endedDescriptions: Record<Role, Record<EndSummary['reason'], string>> = {
+  host: {
+    local: 'Screen sharing has stopped and the invite link no longer works. Nothing on your device is being captured.',
+    'source-stopped': 'You stopped sharing from the browser. The invite link no longer works and nothing is being captured.',
+    remote: 'The viewer disconnected, so the session was closed and screen sharing stopped.',
+    declined: 'Screen sharing has stopped and the invite link no longer works.',
+    connection: 'The connection was lost, so screen sharing stopped. Start a new session to share again.',
+  },
+  viewer: {
+    local: 'You left the session. Open a new invite link to view again.',
+    'source-stopped': 'The presenter stopped sharing their screen.',
+    remote: 'The presenter ended the session. Ask them for a new invite link to view again.',
+    declined: 'The presenter declined your request. Ask them for a new invite link if this was a mistake.',
+    connection: 'The connection to the presenter was lost. Ask for a new invite link to reconnect.',
+  },
+};
+
+/** What the stage shows when there is no stream. */
+export function emptyState(role: Role, active: boolean, phase: SessionPhase, ended: EndSummary | null = null): EmptyState {
+  if (!active && phase === 'ended' && ended) {
+    return {
+      title: ended.reason === 'declined' && ended.role === 'viewer' ? 'Request declined' : 'Session ended',
+      description: endedDescriptions[ended.role][ended.reason],
+      caption: ended.seconds ? `Session length ${formatClock(ended.seconds)}` : 'Session closed',
+      icon: ended.role === 'host' ? 'checkCircle' : 'screen',
+    };
+  }
   if (role === 'viewer' && active) {
     const connecting = phase === 'connecting';
     return {
       title: connecting ? 'Connecting to the presenter…' : 'Waiting for the presenter',
       description: 'Keep this tab open. The shared screen appears here as soon as your request is approved.',
       caption: connecting ? 'Establishing a secure connection' : 'Request sent',
+      icon: 'screen',
     };
   }
   return {
     title: 'No active stream',
     description: 'Start sharing to preview your screen here. You choose exactly what’s visible.',
     caption: 'Start sharing to begin',
+    icon: 'screen',
   };
 }
 

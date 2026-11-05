@@ -22,4 +22,19 @@ describe('emptyState', () => {
   it('invites a presenter to start sharing', () => {
     expect(emptyState('host', false, 'idle').caption).toMatch(/begin/);
   });
+  it('confirms to the presenter that sharing stopped when they end the session', () => {
+    const state = emptyState('host', false, 'ended', { role: 'host', reason: 'local', seconds: 125 });
+    expect(state.title).toBe('Session ended');
+    expect(state.description).toMatch(/no longer works/);
+    expect(state.caption).toBe('Session length 02:05');
+  });
+  it('explains a stop from the browser sharing bar', () => {
+    expect(emptyState('host', false, 'ended', { role: 'host', reason: 'source-stopped', seconds: 0 }).description).toMatch(/from the browser/);
+  });
+  it('tells a viewer the presenter ended the session', () => {
+    expect(emptyState('host', false, 'ended', { role: 'viewer', reason: 'remote', seconds: 10 }).description).toMatch(/presenter ended/);
+  });
+  it('falls back to the idle copy without a summary', () => {
+    expect(emptyState('host', false, 'ended').title).toBe('No active stream');
+  });
 });

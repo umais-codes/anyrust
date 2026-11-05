@@ -13,4 +13,4 @@ export { Select } from './Select';
 export type { SelectOption } from './Select';
 export { TextField, TextArea, SelectField } from './Field';
 export { Dialog } from './Dialog';
-export { ToastProvider, useToast } from './Toast';
+export { ToastProvider, useToast, useDismissToast } from './Toast';

@@ -4,7 +4,8 @@ import type { SessionCallbacks, SessionState } from '../model/types';
 
 export interface SessionApi {
   state: SessionState;
-  share: (useSample: boolean) => Promise<void>;
+  /** Resolves with the invite link once the hosted session is live, or `null` if it did not start. */
+  share: (useSample: boolean) => Promise<string | null>;
   join: SessionEngine['join'];
   approveViewer: () => Promise<void>;
   rejectViewer: () => Promise<void>;
@@ -25,7 +26,7 @@ export function useSession(callbacks: SessionCallbacks): SessionApi {
   const [engine] = useState(
     () =>
       new SessionEngine({
-        onToast: (message) => latest.current.onToast(message),
+        onToast: (message, tone) => latest.current.onToast(message, tone),
         onChatMessage: (message) => latest.current.onChatMessage(message),
         onChatReset: () => latest.current.onChatReset(),
         onSessionRecorded: (record) => latest.current.onSessionRecorded(record),

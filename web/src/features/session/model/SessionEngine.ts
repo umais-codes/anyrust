@@ -4,7 +4,7 @@ import { createSampleStream } from '../lib/sampleStream';
 import type { SampleStream } from '../lib/sampleStream';
 import { buildInviteLink, InvitationError, parseInvitation } from '../lib/invitation';
 import { qualityPresets } from '../lib/qualityPresets';
-import type { JoinResult, QualityKey, SessionCallbacks, SessionPhase, SessionState, StreamStats } from './types';
+import type { EndReason, JoinResult, QualityKey, SessionCallbacks, SessionPhase, SessionState, StreamStats } from './types';
 
 const EMPTY_STATS: StreamStats = { resolution: null, fps: null, bitrateMbps: null, latencyMs: null };
 const DISCONNECT_GRACE_MS = 10_000;
@@ -32,6 +32,7 @@ const initialState = (): SessionState => ({
   quality: 'balanced',
   stats: EMPTY_STATS,
   elapsedSeconds: 0,
+  endSummary: null,
 });
 
 /**
@@ -48,6 +49,8 @@ export class SessionEngine {
   private events: EventSource | null = null;
   private peer: RTCPeerConnection | null = null;
   private sampleSource: SampleStream | null = null;
+  /** The presenter's own capture, kept apart from `state.stream` so it is always stopped on teardown. */
+  private captured: MediaStream | null = null;
   private statsTimer: ReturnType<typeof setInterval> | null = null;
   private disconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingIce: RTCIceCandidateInit[] = [];
@@ -98,6 +101,8 @@ export class SessionEngine {
     window.removeEventListener('online', this.checkService);
     window.removeEventListener('offline', this.handleOffline);
     window.removeEventListener('pagehide', this.handlePageHide);
+    // Capture must never outlive the controller that owns it.
+    if (this.room || this.captured) void this.endSession(true, 'local', { silent: true });
   }
 
   checkService = async (): Promise<void> => {
@@ -114,6 +119,7 @@ export class SessionEngine {
   };
 
   private handlePageHide = (): void => {
+    this.stopCapture();
     this.state.stream?.getTracks().forEach((track) => track.stop());
     const room = this.room;
     if (!room) return;
@@ -127,14 +133,15 @@ export class SessionEngine {
 
   setQuality = (quality: QualityKey): void => {
     this.set({ quality });
-    this.applyQuality().catch((error: unknown) => this.callbacks.onToast(`Couldn’t change stream quality: ${errorMessage(error)}`));
+    this.applyQuality().catch((error: unknown) => this.callbacks.onToast(`Couldn’t change stream quality: ${errorMessage(error)}`, 'error'));
   };
 
   // ---- presenting ---------------------------------------------------------
 
-  share = async (useSample: boolean): Promise<void> => {
-    if (this.state.busy || this.state.ending || this.room) return;
-    this.set({ busy: true, sample: useSample, notice: '' });
+  /** Starts a hosted session. Resolves with the invite link once live, or `null` if it did not start. */
+  share = async (useSample: boolean): Promise<string | null> => {
+    if (this.state.busy || this.state.ending || this.room) return null;
+    this.set({ busy: true, sample: useSample, notice: '', endSummary: null });
     this.setPhase(useSample ? 'Preparing demo stream…' : 'Select a source in the browser dialog…', 'choosing');
     let acquired: MediaStream | undefined;
     try {
@@ -155,7 +162,9 @@ export class SessionEngine {
       this.generation++;
       this.startedAt = null;
       this.lastSession = { address: created.id, kind: useSample ? 'Demo stream' : 'Shared screen' };
-      acquired.getVideoTracks()[0]?.addEventListener('ended', () => void this.endSession());
+      this.captured = acquired;
+      // The browser's own "Stop sharing" control ends the track; treat that as ending the session.
+      acquired.getVideoTracks()[0]?.addEventListener('ended', this.handleSourceEnded, { once: true });
       this.set({
         active: true,
         roomId: created.id,
@@ -167,14 +176,16 @@ export class SessionEngine {
       });
       this.setPhase('Waiting for a viewer to join', 'waiting');
       this.listen();
-      this.callbacks.onToast(useSample ? 'Demo stream started. Open the viewer to test the connection.' : 'Sharing started. Copy the invite link to invite a viewer.');
+      return this.state.inviteLink;
     } catch (error) {
       acquired?.getTracks().forEach((track) => track.stop());
       this.sampleSource?.stop();
       this.sampleSource = null;
-      if (this.room) await this.endSession();
+      this.captured = null;
+      if (this.room) await this.endSession(true, 'connection', { silent: true });
       else this.setPhase('Not connected', 'idle');
       this.callbacks.onToast(error instanceof DOMException && error.name === 'NotAllowedError' ? 'Screen selection was canceled.' : errorMessage(error));
+      return null;
     } finally {
       this.set({ busy: false });
     }
@@ -196,8 +207,8 @@ export class SessionEngine {
       await this.applyQuality();
       if (pc === this.peer && pc.connectionState !== 'connected') this.setPhase('Connecting to viewer…', 'connecting');
     } catch (error) {
-      this.callbacks.onToast(errorMessage(error));
-      await this.endSession();
+      this.callbacks.onToast(errorMessage(error), 'error');
+      await this.endSession(true, 'connection', { silent: true });
     }
   };
 
@@ -209,7 +220,7 @@ export class SessionEngine {
       await api.signal(room, { type: 'reject' });
       this.setPhase('Waiting for a viewer to join', 'waiting');
     } catch (error) {
-      this.callbacks.onToast(errorMessage(error));
+      this.callbacks.onToast(errorMessage(error), 'error');
     }
   };
 
@@ -226,7 +237,7 @@ export class SessionEngine {
       this.startedAt = null;
       this.lastSession = { address: invitation.id, kind: 'Viewed session' };
       history.replaceState(null, '', '/');
-      this.set({ role: 'viewer', active: true, roomId: invitation.id, notice: '', joinedLink: value, title: 'Waiting for approval', metricsText: 'Request sent' });
+      this.set({ role: 'viewer', active: true, endSummary: null, roomId: invitation.id, notice: '', joinedLink: value, title: 'Waiting for approval', metricsText: 'Request sent' });
       this.setPhase('Waiting for the presenter to approve', 'waiting');
       this.listen();
       return { ok: true };
@@ -246,18 +257,23 @@ export class SessionEngine {
 
   // ---- ending -------------------------------------------------------------
 
-  endSession = async (notify = true): Promise<void> => {
-    if (this.state.ending || (!this.room && !this.state.stream)) return;
-    this.set({ ending: true });
+  /**
+   * Tears a session down. Capture is stopped first and synchronously, before any network
+   * call, so the browser's sharing indicator disappears the moment the session ends.
+   */
+  endSession = async (notify = true, reason: EndReason = 'local', options: { silent?: boolean } = {}): Promise<void> => {
+    if (this.state.ending || (!this.room && !this.state.stream && !this.captured)) return;
     const selected = this.room;
-    const wasHost = this.state.role === 'host';
+    const role = this.state.role;
+    const wasHost = role === 'host';
+    const seconds = this.startedAt ? Math.max(1, Math.round((Date.now() - this.startedAt) / 1000)) : 0;
+    this.stopCapture();
+    this.state.stream?.getTracks().forEach((track) => track.stop());
+    this.set({ ending: true });
     this.generation++;
     this.events?.close();
     this.events = null;
     this.closePeer();
-    this.sampleSource?.stop();
-    this.sampleSource = null;
-    this.state.stream?.getTracks().forEach((track) => track.stop());
     this.room = null;
     this.callbacks.onChatReset();
     this.set({
@@ -272,12 +288,16 @@ export class SessionEngine {
       title: 'Preview',
       role: 'host',
       metricsText: 'Ready to connect',
+      endSummary: { role, reason, seconds },
     });
-    this.setPhase('Session ended', 'ended');
+    this.setPhase(wasHost ? 'Session ended · Screen sharing stopped' : 'Session ended', 'ended');
     if (this.lastSession) {
-      const seconds = this.startedAt ? Math.max(1, Math.round((Date.now() - this.startedAt) / 1000)) : 0;
       this.callbacks.onSessionRecorded({ ...this.lastSession, seconds });
       this.lastSession = null;
+    }
+    if (wasHost && !options.silent) {
+      if (reason === 'local') this.callbacks.onToast('Session ended. Your screen is no longer being shared.', 'success');
+      else if (reason === 'source-stopped') this.callbacks.onToast('You stopped sharing from the browser, so the session has ended.', 'info');
     }
     try {
       if (selected && notify) {
@@ -290,6 +310,20 @@ export class SessionEngine {
       this.set({ ending: false });
     }
   };
+
+  private handleSourceEnded = (): void => {
+    void this.endSession(true, 'source-stopped');
+  };
+
+  /** Stops the presenter's capture (screen or demo source) and detaches its end listener. */
+  private stopCapture(): void {
+    const captured = this.captured;
+    this.captured = null;
+    captured?.getVideoTracks()[0]?.removeEventListener('ended', this.handleSourceEnded);
+    captured?.getTracks().forEach((track) => track.stop());
+    this.sampleSource?.stop();
+    this.sampleSource = null;
+  }
 
   // ---- signaling ----------------------------------------------------------
 
@@ -308,15 +342,15 @@ export class SessionEngine {
         })
         .catch((error: unknown) => {
           if (current === this.generation) {
-            this.callbacks.onToast(errorMessage(error));
-            void this.endSession();
+            this.callbacks.onToast(errorMessage(error), 'error');
+            void this.endSession(true, 'connection');
           }
         });
     };
     source.onerror = () => {
       if (current !== this.generation || this.state.ending) return;
       this.set({ notice: 'This session is no longer available. Ask the presenter for a new invite link, or start your own session.' });
-      void this.endSession();
+      void this.endSession(true, 'connection');
     };
   }
 
@@ -368,13 +402,13 @@ export class SessionEngine {
           this.set({ title: 'Ready to share', metricsText: 'Invite link is still active' });
         } else {
           this.callbacks.onToast('The presenter left the session.');
-          await this.endSession(false);
+          await this.endSession(false, 'remote');
         }
         return;
       case 'ended':
       case 'rejected':
         this.callbacks.onToast(message.type === 'rejected' ? 'Your request was declined by the presenter.' : 'The presenter ended the session.');
-        await this.endSession(false);
+        await this.endSession(false, message.type === 'rejected' ? 'declined' : 'remote');
         return;
     }
   }
@@ -396,7 +430,7 @@ export class SessionEngine {
     pc.onicecandidate = (event) => {
       if (!event.candidate || !room) return;
       api.signal(room, { type: 'ice', data: event.candidate.toJSON() }).catch((error: unknown) => {
-        if (current === this.generation) this.callbacks.onToast(errorMessage(error));
+        if (current === this.generation) this.callbacks.onToast(errorMessage(error), 'error');
       });
     };
     pc.ontrack = (event) => {
@@ -414,13 +448,13 @@ export class SessionEngine {
         this.statsTimer ??= setInterval(() => void this.updateStats(), 1000);
       } else if (pc.connectionState === 'failed') {
         this.set({ notice: 'Couldn’t establish a media connection. Restrictive networks can block it try again on the same network, or configure a TURN relay on the server.' });
-        void this.endSession();
+        void this.endSession(true, 'connection');
       } else if (pc.connectionState === 'disconnected') {
         this.setPhase('Connection interrupted', 'interrupted');
         this.disconnectTimer = setTimeout(() => {
           if (pc === this.peer && pc.connectionState === 'disconnected') {
             this.callbacks.onToast('The viewer left the session.');
-            void this.endSession();
+            void this.endSession(true, 'remote', { silent: true });
           }
         }, DISCONNECT_GRACE_MS);
       }

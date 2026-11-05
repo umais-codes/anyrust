@@ -1,7 +1,7 @@
 import {
   Activity, ArrowRight, Eye, House, LogIn, UserCheck, Check, ChevronDown, ChevronRight, CircleCheck, CircleHelp, Clock, Copy, ExternalLink,
   LayoutGrid, Link, Lock, Maximize2, Menu, MessageCircle, Minimize2, Monitor, Moon, Play, ScreenShare,
-  SendHorizontal, ShieldCheck, Sun, TriangleAlert, X,
+  SendHorizontal, ShieldCheck, Sun, TriangleAlert, X, Info,
 } from 'lucide-react';
 import type { LucideIcon, LucideProps } from 'lucide-react';
 
@@ -38,6 +38,7 @@ const icons = {
   moon: Moon,
   monitor: Monitor,
   alert: TriangleAlert,
+  info: Info,
 } satisfies Record<string, LucideIcon>;
 
 export type IconName = keyof typeof icons;

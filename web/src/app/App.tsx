@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ComponentType } from 'react';
 import { ApprovalDialog } from '@/features/approval';
-import { InviteDialog } from '@/features/present';
+import { InviteDialog, copyInviteLink, copyWhenFocused, startPendingCopy } from '@/features/present';
 import { useChatLog } from '@/features/chat';
 import { useHistory } from '@/features/history';
 import { useSession } from '@/features/session';
 import { ThemeToggle } from '@/features/theme';
 import { Sidebar, Topbar } from '@/shared/layout';
 import type { NavEntry } from '@/shared/layout';
-import { Notice, useToast } from '@/shared/ui';
+import { Notice, useDismissToast, useToast } from '@/shared/ui';
 import { hrefFor, useRoute, viewTitles } from './router';
 import type { View } from './router';
 import { HelpView } from './views/HelpView';
@@ -18,6 +18,9 @@ import { JoinView } from './views/JoinView';
 import { SessionView } from './views/SessionView';
 import { ShareView } from './views/ShareView';
 import type { ViewProps } from './views/shared';
+
+/** How long the bottom-right "link copied" toast shows before the invite popup takes over. */
+const INVITE_POPUP_DELAY_MS = 1800;
 
 const screens: Record<View, ComponentType<ViewProps>> = {
   home: HomeView,
@@ -30,6 +33,7 @@ const screens: Record<View, ComponentType<ViewProps>> = {
 
 export function App() {
   const toast = useToast();
+  const dismissToast = useDismissToast();
   const history = useHistory();
   const [view, navigate] = useRoute();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -55,18 +59,49 @@ export function App() {
     wasActive.current = state.active;
   }, [state.active, navigate]);
 
-  // Offer the invite link once per hosted session, as soon as it is live and ready to send.
+  // Starting to share copies the invite link automatically and then offers it in a popup.
   const [inviteOpen, setInviteOpen] = useState(false);
-  const inviteShown = useRef(false);
+  const [inviteCopied, setInviteCopied] = useState(false);
+  const stopWaitingToCopy = useRef<(() => void) | null>(null);
   const hosting = state.active && state.role === 'host' && Boolean(state.inviteLink);
+  const hostingRef = useRef(hosting);
+  hostingRef.current = hosting;
+
   useEffect(() => {
-    if (!state.active) inviteShown.current = false;
-    if (hosting && !inviteShown.current) {
-      inviteShown.current = true;
-      setInviteOpen(true);
-    }
-    if (!hosting) setInviteOpen(false);
-  }, [state.active, hosting]);
+    if (hosting) return;
+    setInviteOpen(false);
+    setInviteCopied(false);
+    stopWaitingToCopy.current?.();
+    stopWaitingToCopy.current = null;
+  }, [hosting]);
+
+  // Must run synchronously inside the click, so the clipboard write keeps the click's permission.
+  const share = (useSample: boolean) => {
+    const pending = startPendingCopy();
+    return session.share(useSample).then(async (link) => {
+      if (!link) {
+        pending?.cancel();
+        return link;
+      }
+      pending?.resolve(link);
+      const copied = (pending ? await pending.result : false) || (await copyInviteLink(link));
+      let copiedToast: number | null = null;
+      if (copied) {
+        setInviteCopied(true);
+        copiedToast = toast('Invite link copied to clipboard.', 'success');
+      }
+      // e.g. Chrome moved focus to the shared tab: copy the moment the person comes back.
+      // The popup is already open by then, so it shows the confirmation itself instead of a toast.
+      else stopWaitingToCopy.current = copyWhenFocused(link, () => setInviteCopied(true));
+      // Let the "copied" toast be read first, then hand over to the popup, which repeats the confirmation.
+      window.setTimeout(() => {
+        if (copiedToast !== null) dismissToast(copiedToast);
+        if (hostingRef.current) setInviteOpen(true);
+      }, copied ? INVITE_POPUP_DELAY_MS : 0);
+      return link;
+    });
+  };
+  const sessionApi = { ...session, share };
 
   const nav: NavEntry[] = [
     { id: 'home', label: 'Home', icon: 'home', href: hrefFor('home') },
@@ -100,11 +135,11 @@ export function App() {
               <Notice message={state.notice} onDismiss={session.dismissNotice} />
             </div>
           )}
-          <Screen session={session} chat={chat} history={history.entries} />
+          <Screen session={sessionApi} chat={chat} history={history.entries} />
         </main>
       </div>
 
-      <InviteDialog open={inviteOpen && !state.approvalOpen} state={state} onClose={() => setInviteOpen(false)} />
+      <InviteDialog open={inviteOpen && !state.approvalOpen} copied={inviteCopied} state={state} onClose={() => setInviteOpen(false)} />
       <ApprovalDialog open={state.approvalOpen} onApprove={() => void session.approveViewer()} onDecline={() => void session.rejectViewer()} />
     </>
   );
